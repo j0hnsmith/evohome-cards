@@ -77,14 +77,14 @@ Resource UI path:
 ## Basic Card YAML
 
 ```yaml
-type: custom:evohome-cards
+type: custom:evohome-zone-card
 entity: climate.living_room
 ```
 
 ## Full Config YAML Example
 
 ```yaml
-type: custom:evohome-cards
+type: custom:evohome-zone-card
 entity: climate.living_room
 name: Living Room
 show_hvac_toggle: true

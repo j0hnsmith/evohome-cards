@@ -1,5 +1,5 @@
 /**
- * Evohome Cards v10
+ * Evohome Zone Card v10
  * A custom Lovelace card for Honeywell Evohome zones.
  *
  * Config options:
@@ -884,13 +884,13 @@ class EvohomeZoneCard extends HTMLElement {
   }
 }
 
-if (!customElements.get("evohome-cards")) {
-  customElements.define("evohome-cards", EvohomeZoneCard);
+if (!customElements.get("evohome-zone-card")) {
+  customElements.define("evohome-zone-card", EvohomeZoneCard);
 }
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "evohome-cards",
-  name: "Evohome Cards",
+  type: "evohome-zone-card",
+  name: "Evohome Zone Card",
   description: "Custom card for Honeywell Evohome heating zones with override controls.",
 });

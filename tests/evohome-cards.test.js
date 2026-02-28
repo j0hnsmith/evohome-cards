@@ -40,19 +40,19 @@ function makeHass(state) {
 }
 
 function createCard(state, config = { entity: "climate.living_room" }) {
-  const card = document.createElement("evohome-cards");
+  const card = document.createElement("evohome-zone-card");
   card.setConfig(config);
   if (state) card.hass = makeHass(state);
   return card;
 }
 
-describe("evohome-cards", () => {
+describe("evohome-zone-card", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
   });
 
   it("renders with configured entity", () => {
-    const card = document.createElement("evohome-cards");
+    const card = document.createElement("evohome-zone-card");
     card.setConfig({ entity: "climate.living_room" });
     card.hass = makeHass(makeState());
 
@@ -61,7 +61,7 @@ describe("evohome-cards", () => {
   });
 
   it("escapes friendly name HTML", () => {
-    const card = document.createElement("evohome-cards");
+    const card = document.createElement("evohome-zone-card");
     card.setConfig({ entity: "climate.living_room" });
 
     const badName = '<img src=x onerror="alert(1)">';
@@ -322,17 +322,17 @@ describe("evohome-cards", () => {
   });
 
   it("validates config entity and applies default/override flags", () => {
-    const missingEntityCard = document.createElement("evohome-cards");
+    const missingEntityCard = document.createElement("evohome-zone-card");
     expect(() => missingEntityCard.setConfig({})).toThrow();
 
-    const defaultCard = document.createElement("evohome-cards");
+    const defaultCard = document.createElement("evohome-zone-card");
     defaultCard.setConfig({ entity: "climate.living_room" });
     expect(defaultCard._config.show_hvac_toggle).toBe(true);
     expect(defaultCard._config.show_accent_bar).toBe(true);
     expect(defaultCard._config.temp_pills).toBe(false);
     expect(defaultCard._config.compact).toBe(false);
 
-    const overrideCard = document.createElement("evohome-cards");
+    const overrideCard = document.createElement("evohome-zone-card");
     overrideCard.setConfig({
       entity: "climate.living_room",
       show_hvac_toggle: false,
@@ -347,7 +347,7 @@ describe("evohome-cards", () => {
   });
 
   it("renders not-found state and recovers when entity appears", () => {
-    const card = document.createElement("evohome-cards");
+    const card = document.createElement("evohome-zone-card");
     card.setConfig({ entity: "climate.living_room" });
     card.hass = { states: {}, callService: vi.fn() };
     expect(card.shadowRoot.innerHTML).toContain("Entity not found: climate.living_room");
