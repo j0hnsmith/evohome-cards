@@ -216,6 +216,27 @@ class EvohomeZoneCard extends HTMLElement {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
+  _buildHoursOptions() {
+    var selected = Math.floor(this._durationMins / 60);
+    var html = "";
+    for (var i = 0; i <= 23; i++) {
+      var sel = i === selected ? " selected" : "";
+      html += "<option value='" + i + "'" + sel + ">" + i + "</option>";
+    }
+    return html;
+  }
+
+  _buildMinsOptions() {
+    var selected = this._durationMins % 60;
+    var html = "";
+    for (var i = 0; i <= 55; i += 5) {
+      var selAttr = i === selected ? " selected" : "";
+      var label = String(i).padStart(2, "0");
+      html += "<option value='" + i + "'" + selAttr + ">" + label + "</option>";
+    }
+    return html;
+  }
+
   _getEffectiveTarget(status) {
     if (this._isOverride(status)) {
       return status.targetHeatTemp !== undefined ? status.targetHeatTemp : status.targetTemp;
@@ -888,9 +909,606 @@ if (!customElements.get("evohome-zone-card")) {
   customElements.define("evohome-zone-card", EvohomeZoneCard);
 }
 
+class EvohomeHotWaterCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {};
+    this._hass = null;
+    this._loading = false;
+    this._expectedOperationMode = null;
+    this._loadingTimeout = null;
+    this._durationMins = 60;
+    this._showCustomDuration = false;
+    this._revertTimeout = null;
+    this._bridgeTimeout = null;
+    this._scheduledUntil = null;
+    this._draftOperationMode = null;
+    this._dirty = false;
+    this._durationDirty = false;
+  }
+
+  static getStubConfig() {
+    return { entity: "water_heater.dhw_controller" };
+  }
+
+  disconnectedCallback() {
+    if (this._loadingTimeout) {
+      clearTimeout(this._loadingTimeout);
+      this._loadingTimeout = null;
+    }
+    if (this._revertTimeout) {
+      clearTimeout(this._revertTimeout);
+      this._revertTimeout = null;
+    }
+    if (this._bridgeTimeout) {
+      clearTimeout(this._bridgeTimeout);
+      this._bridgeTimeout = null;
+    }
+  }
+
+  setConfig(config) {
+    if (!config.entity) {
+      throw new Error("You must define an entity (water_heater.xxx)");
+    }
+    this._config = {
+      entity: config.entity,
+      name: config.name || null,
+    };
+    this._loading = false;
+    this._expectedOperationMode = null;
+    this._durationMins = 60;
+    this._showCustomDuration = false;
+    this._scheduledUntil = null;
+    this._draftOperationMode = null;
+    this._dirty = false;
+    this._durationDirty = false;
+    if (this._revertTimeout) {
+      clearTimeout(this._revertTimeout);
+      this._revertTimeout = null;
+    }
+    if (this._bridgeTimeout) {
+      clearTimeout(this._bridgeTimeout);
+      this._bridgeTimeout = null;
+    }
+    this._render();
+  }
+
+  set hass(hass) {
+    var oldHass = this._hass;
+    this._hass = hass;
+
+    if (!oldHass || !this._config.entity) {
+      this._render();
+      return;
+    }
+
+    var oldState = oldHass.states[this._config.entity];
+    var newState = hass.states[this._config.entity];
+    if (oldState !== newState) {
+      if (newState) {
+        var currentOpMode = String((newState.attributes || {}).operation_mode || "").toLowerCase();
+        if (currentOpMode === "auto" && this._scheduledUntil) {
+          this._scheduledUntil = null;
+          if (this._revertTimeout) {
+            clearTimeout(this._revertTimeout);
+            this._revertTimeout = null;
+          }
+          if (this._bridgeTimeout) {
+            clearTimeout(this._bridgeTimeout);
+            this._bridgeTimeout = null;
+          }
+        }
+      }
+      if (this._loading && this._expectedOperationMode && newState) {
+        var opMode = String((newState.attributes || {}).operation_mode || "").toLowerCase();
+        if (opMode === this._expectedOperationMode) {
+          this._clearLoading();
+        }
+      }
+      this._render();
+    }
+  }
+
+  _clearLoading() {
+    this._loading = false;
+    this._expectedOperationMode = null;
+    if (this._loadingTimeout) {
+      clearTimeout(this._loadingTimeout);
+      this._loadingTimeout = null;
+    }
+  }
+
+  _startLoading(expectedOperationMode) {
+    this._loading = true;
+    this._expectedOperationMode = expectedOperationMode;
+    if (this._loadingTimeout) clearTimeout(this._loadingTimeout);
+    var self = this;
+    this._loadingTimeout = setTimeout(function () {
+      self._clearLoading();
+      self._render();
+    }, 30000);
+  }
+
+  _escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  _formatTime(isoString) {
+    if (!isoString) return "\u2014";
+    var d = new Date(isoString);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  _formatDate(isoString) {
+    if (!isoString) return "";
+    var d = new Date(isoString);
+    var now = new Date();
+    var tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    if (d.toDateString() === now.toDateString()) return "today";
+    if (d.toDateString() === tomorrow.toDateString()) return "tomorrow";
+    return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  }
+
+  _stateColor(state) {
+    var normalized = String(state || "").toLowerCase();
+    if (normalized === "on") return "#fc0000";
+    if (normalized === "off") return "#6ca4fc";
+    return "#9c9c9c";
+  }
+
+  _getCurrentOperationMode() {
+    if (!this._hass || !this._config.entity) return "auto";
+    var entity = this._hass.states[this._config.entity];
+    if (!entity) return "auto";
+    return String((entity.attributes || {}).operation_mode || "").toLowerCase() || "auto";
+  }
+
+  _getEffectiveOperationMode() {
+    return this._draftOperationMode || this._getCurrentOperationMode();
+  }
+
+  _clearDraft() {
+    this._draftOperationMode = null;
+    this._dirty = false;
+    this._durationDirty = false;
+  }
+
+  _setDraftMode(mode) {
+    if (this._loading) return;
+    var normalized = String(mode || "").toLowerCase();
+    if (normalized !== "auto" && normalized !== "on" && normalized !== "off") return;
+    var currentMode = this._getCurrentOperationMode();
+    this._draftOperationMode = normalized;
+    this._dirty = normalized !== currentMode || this._durationDirty;
+    this._render();
+  }
+
+  _setDuration(mins) {
+    var next = parseInt(mins, 10);
+    if (isNaN(next)) return;
+    if (next < 1) next = 1;
+    if (next > 1439) next = 1439;
+    this._durationMins = next;
+    this._showCustomDuration = next % 60 !== 0 || next > 180;
+    var effectiveMode = this._getEffectiveOperationMode();
+    if (effectiveMode !== "auto") {
+      this._durationDirty = true;
+      this._dirty = true;
+    }
+    this._render();
+  }
+
+  _toggleCustomDuration() {
+    this._showCustomDuration = !this._showCustomDuration;
+    this._render();
+  }
+
+  _handleCustomHours(value) {
+    var hours = parseInt(value, 10);
+    if (isNaN(hours) || hours < 0) hours = 0;
+    if (hours > 23) hours = 23;
+    var mins = this._durationMins % 60;
+    this._setDuration(hours * 60 + mins);
+  }
+
+  _handleCustomMins(value) {
+    var mins = parseInt(value, 10);
+    if (isNaN(mins) || mins < 0) mins = 0;
+    if (mins > 59) mins = 59;
+    var hours = Math.floor(this._durationMins / 60);
+    this._setDuration(hours * 60 + mins);
+  }
+
+  _durationToEndTime(mins) {
+    var d = new Date();
+    d.setMinutes(d.getMinutes() + mins);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  _buildHoursOptions() {
+    var selected = Math.floor(this._durationMins / 60);
+    var html = "";
+    for (var i = 0; i <= 23; i++) {
+      var sel = i === selected ? " selected" : "";
+      html += "<option value='" + i + "'" + sel + ">" + i + "</option>";
+    }
+    return html;
+  }
+
+  _buildMinsOptions() {
+    var selected = this._durationMins % 60;
+    var html = "";
+    for (var i = 0; i <= 55; i += 5) {
+      var selAttr = i === selected ? " selected" : "";
+      var label = String(i).padStart(2, "0");
+      html += "<option value='" + i + "'" + selAttr + ">" + label + "</option>";
+    }
+    return html;
+  }
+
+  _scheduleResetToAuto(minutes) {
+    if (this._revertTimeout) clearTimeout(this._revertTimeout);
+    var durationMs = minutes * 60000;
+    var self = this;
+    this._scheduledUntil = new Date(Date.now() + durationMs).toISOString();
+    this._revertTimeout = setTimeout(function () {
+      self._setOperationMode("auto", true);
+    }, durationMs);
+  }
+
+  _applyDraftChanges() {
+    if (this._loading || !this._dirty) return Promise.resolve(false);
+    var selectedMode = this._getEffectiveOperationMode();
+    return this._setOperationMode(selectedMode, false).then(
+      function (succeeded) {
+        if (succeeded) this._clearDraft();
+        this._render();
+        return succeeded;
+      }.bind(this)
+    );
+  }
+
+  _getNextSetpointIso() {
+    if (!this._hass || !this._config.entity) return null;
+    var entity = this._hass.states[this._config.entity];
+    if (!entity) return null;
+    var attrs = entity.attributes || {};
+    var status = attrs.status || {};
+    var setpoints = status.setpoints || {};
+    return setpoints.next_sp_from || null;
+  }
+
+  _scheduleBridgeIfNeeded(mode) {
+    if (this._bridgeTimeout) {
+      clearTimeout(this._bridgeTimeout);
+      this._bridgeTimeout = null;
+    }
+    if (!this._scheduledUntil || mode === "auto") return;
+
+    var nextSpIso = this._getNextSetpointIso();
+    if (!nextSpIso) return;
+
+    var endMs = Date.parse(this._scheduledUntil);
+    var bridgeMs = Date.parse(nextSpIso) + 60000;
+    if (isNaN(endMs) || isNaN(bridgeMs) || bridgeMs >= endMs) return;
+    if (bridgeMs <= Date.now() + 5000) return;
+
+    var self = this;
+    var delay = Math.max(0, bridgeMs - Date.now());
+    this._bridgeTimeout = setTimeout(function () {
+      if (!self._scheduledUntil || Date.now() >= Date.parse(self._scheduledUntil)) return;
+      self._setOperationMode(mode, true).finally(function () {
+        self._scheduleBridgeIfNeeded(mode);
+      });
+    }, delay);
+  }
+
+  _setOperationMode(mode, isScheduledReset) {
+    if (!this._hass || !this._config.entity || this._loading) return Promise.resolve(false);
+    var normalized = String(mode || "").toLowerCase();
+    if (normalized !== "auto" && normalized !== "on" && normalized !== "off") return Promise.resolve(false);
+
+    if (normalized === "auto") {
+      this._scheduledUntil = null;
+      if (this._revertTimeout) {
+        clearTimeout(this._revertTimeout);
+        this._revertTimeout = null;
+      }
+      if (this._bridgeTimeout) {
+        clearTimeout(this._bridgeTimeout);
+        this._bridgeTimeout = null;
+      }
+    }
+
+    this._startLoading(normalized);
+    this._render();
+    var succeeded = false;
+    return this._hass
+      .callService("water_heater", "set_operation_mode", {
+        entity_id: this._config.entity,
+        operation_mode: normalized,
+      })
+      .then(function () {
+        succeeded = true;
+      })
+      .catch(function (err) {
+        console.error("Failed to set hot water operation mode:", err);
+      })
+      .finally(
+        function () {
+          if (succeeded && normalized !== "auto" && !isScheduledReset) {
+            this._scheduleResetToAuto(this._durationMins);
+          }
+          if (succeeded && normalized !== "auto") {
+            this._scheduleBridgeIfNeeded(normalized);
+          }
+          // Keep spinner visible until hass state confirms expected mode.
+          if (!succeeded) {
+            this._clearLoading();
+          }
+          this._render();
+        }.bind(this)
+      )
+      .then(function () {
+        return succeeded;
+      });
+  }
+
+  _render() {
+    if (!this.shadowRoot) return;
+
+    if (!this._hass || !this._config.entity) {
+      this.shadowRoot.innerHTML = '<ha-card><div style="padding:16px;">Loading...</div></ha-card>';
+      return;
+    }
+
+    var entity = this._hass.states[this._config.entity];
+    if (!entity) {
+      this.shadowRoot.innerHTML =
+        '<ha-card><div style="padding:16px; color:#c62828;">Entity not found: ' +
+        this._escapeHtml(this._config.entity) +
+        "</div></ha-card>";
+      return;
+    }
+
+    var attrs = entity.attributes || {};
+    var status = attrs.status || {};
+    var setpoints = status.setpoints || {};
+    var stateStatus = status.state_status || {};
+    var tempStatus = status.temperature_status || {};
+    var activeFaults = status.activeFaults || status.active_faults || [];
+
+    var friendlyName = this._config.name || attrs.friendly_name || "Hot Water";
+    var currentTemp = attrs.current_temperature;
+    if (currentTemp === null || currentTemp === undefined) {
+      currentTemp = tempStatus.temperature;
+    }
+    var currentTempStr = currentTemp === null || currentTemp === undefined ? "\u2014" : Number(currentTemp).toFixed(1);
+
+    var operationMode = String(attrs.operation_mode || "").toLowerCase() || "auto";
+    var operationList = attrs.operation_list || ["auto", "on", "off"];
+    var effectiveOperationMode = this._getEffectiveOperationMode();
+    var thisFrom = setpoints.this_sp_from || null;
+    var thisState = setpoints.this_sp_state || "\u2014";
+    var nextFrom = setpoints.next_sp_from || null;
+    var nextState = setpoints.next_sp_state || "\u2014";
+    var modeValue = stateStatus.mode || "FollowSchedule";
+    var untilValue = stateStatus.until || null;
+    var tempAvailable = tempStatus.is_available !== false;
+    var activeUntil = this._scheduledUntil || untilValue;
+    var isAutoMode = operationMode === "auto" && String(modeValue).toLowerCase() === "followschedule" && !activeUntil;
+    var entityState = String(entity.state || "").toLowerCase();
+    var rawStateValue;
+    if (entityState === "on" || entityState === "off") {
+      rawStateValue = entityState;
+    } else if (isAutoMode) {
+      rawStateValue = thisState || stateStatus.state || "unknown";
+    } else {
+      rawStateValue = stateStatus.state || thisState || "unknown";
+    }
+    var stateValue = String(rawStateValue).toLowerCase();
+    var stateLabel = "Off";
+    if (stateValue === "on") {
+      stateLabel = "On (" + (isAutoMode ? "Auto" : "Override") + ")";
+    } else if (stateValue === "off") {
+      stateLabel = "Off (" + (isAutoMode ? "Auto" : "Override") + ")";
+    }
+    var isBusy = this._loading ? "true" : "false";
+    var stateColor = this._stateColor(stateValue);
+    var loadingHtml = this._loading
+      ? '<div class="loading-overlay"><div class="spinner"></div></div>'
+      : "";
+
+    var buttonsHtml = operationList
+      .map(
+        function (mode) {
+          var normalized = String(mode).toLowerCase();
+          var selected = normalized === effectiveOperationMode;
+          var className = "mode-btn" + (selected ? " selected" : "");
+          var label = normalized === "auto" ? "Auto" : normalized === "on" ? "On" : normalized === "off" ? "Off" : normalized;
+          return (
+            '<button class="' +
+            className +
+            '" data-mode="' +
+            this._escapeHtml(normalized) +
+            '"' +
+            (this._loading ? " disabled" : "") +
+            ">" +
+            this._escapeHtml(label) +
+            "</button>"
+          );
+        }.bind(this)
+      )
+      .join("");
+
+    var durationHtml = [
+      '<div class="duration-wrap">',
+      '<div class="duration-label">Override duration</div>',
+      '<div class="dur-row">',
+      '<button class="dur-btn' + (this._durationMins === 30 ? " selected" : "") + '" data-mins="30">30m</button>',
+      '<button class="dur-btn' + (this._durationMins === 60 ? " selected" : "") + '" data-mins="60">1h</button>',
+      '<button class="dur-btn' + (this._durationMins === 120 ? " selected" : "") + '" data-mins="120">2h</button>',
+      '<button class="dur-btn' + (this._durationMins === 240 ? " selected" : "") + '" data-mins="240">4h</button>',
+      '<button class="dur-btn custom-toggle" id="custom-dur-btn">' + (this._showCustomDuration ? "Hide custom" : "Custom") + "</button>",
+      "</div>",
+      this._showCustomDuration
+        ? '<div class="custom-duration">' +
+          '<select id="custom-hours">' + this._buildHoursOptions() + "</select>" +
+          '<span class="custom-duration-label">hrs</span>' +
+          '<select id="custom-mins">' + this._buildMinsOptions() + "</select>" +
+          '<span class="custom-duration-label">mins</span>' +
+          "</div>"
+        : "",
+      effectiveOperationMode !== "auto"
+        ? '<div class="duration-hint">On/Off will return to Auto at around ' + this._escapeHtml(this._durationToEndTime(this._durationMins)) + ".</div>"
+        : "",
+      "</div>",
+    ].join("");
+
+    var applyControls = "";
+    if (this._dirty) {
+      applyControls = [
+        '<div class="actions">',
+        '<button class="action-btn apply" id="apply-btn"' + (this._loading ? " disabled" : "") + ">Apply</button>",
+        '<button class="action-btn discard" id="discard-btn"' + (this._loading ? " disabled" : "") + ">Discard</button>",
+        "</div>",
+      ].join("");
+    }
+
+    var faultsHtml = "";
+    if (activeFaults.length > 0) {
+      var faultLabels = activeFaults
+        .map(
+          function (fault) {
+            return this._escapeHtml((fault && (fault.faultType || fault.fault_type)) || "Fault");
+          }.bind(this)
+        )
+        .join(", ");
+      faultsHtml = '<div class="faults">Faults: ' + faultLabels + "</div>";
+    }
+
+    this.shadowRoot.innerHTML = [
+      "<style>",
+      ":host { display:block; }",
+      "ha-card { border-radius:12px; overflow:hidden; position:relative; }",
+      ".wrap { padding: 14px 16px 16px; font-family: var(--paper-font-body1_-_font-family); }",
+      ".loading-overlay { position:absolute; top:0; left:0; right:0; bottom:0; background:rgba(255,255,255,0.7); display:flex; align-items:center; justify-content:center; z-index:10; border-radius:var(--ha-card-border-radius, 12px); }",
+      "@keyframes spin { 0% { transform:rotate(0deg); } 100% { transform:rotate(360deg); } }",
+      ".spinner { width:36px; height:36px; border:3px solid rgba(0,0,0,0.12); border-top-color:#6ca4fc; border-radius:50%; animation:spin 0.8s linear infinite; }",
+      ".head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; }",
+      ".name { font-size: 1.02rem; font-weight: 600; color: var(--primary-text-color); }",
+      ".state { font-size: 0.86rem; font-weight: 600; color: " + stateColor + "; display:flex; align-items:center; justify-content:flex-end; }",
+      ".state-text { display:inline-block; }",
+      ".state-icon { --mdc-icon-size: 44px; width:44px; height:44px; margin-left:6px; color: " + stateColor + "; flex:0 0 auto; }",
+      ".temp { font-size: 1.8rem; font-weight: 700; line-height:1.1; margin: 6px 0 10px; color: var(--primary-text-color); }",
+      ".unit { font-size: 0.9rem; opacity: 0.8; margin-left:2px; }",
+      ".meta { display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom: 12px; }",
+      ".box { background: rgba(127,127,127,0.08); border-radius:10px; padding:8px 10px; }",
+      ".k { font-size:0.76rem; opacity:0.75; margin-bottom:2px; }",
+      ".v { font-size:0.9rem; font-weight:600; }",
+      ".mode-row { display:flex; gap:8px; margin-top: 4px; flex-wrap:wrap; }",
+      ".mode-btn { border:1px solid rgba(127,127,127,0.35); background:transparent; border-radius:999px; padding:7px 12px; font-size:0.85rem; cursor:pointer; }",
+      ".mode-btn.selected { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color); }",
+      ".mode-btn:disabled { opacity:0.55; cursor:not-allowed; }",
+      ".duration-wrap { margin-top: 10px; }",
+      ".duration-label { font-size:0.78rem; opacity:0.8; margin-bottom:6px; }",
+      ".dur-row { display:flex; flex-wrap:wrap; gap:8px; }",
+      ".dur-btn { border:1px solid rgba(127,127,127,0.35); background:transparent; border-radius:999px; padding:6px 10px; font-size:0.78rem; cursor:pointer; }",
+      ".dur-btn.selected { background: rgba(127,127,127,0.22); font-weight:600; }",
+      ".custom-toggle { margin-left: auto; }",
+      ".custom-duration { display:flex; align-items:center; gap:6px; margin-top:8px; }",
+      ".custom-duration select { padding:6px 8px; border:1px solid rgba(127,127,127,0.35); border-radius:8px; font-size:0.8rem; background:transparent; color:inherit; font-family:inherit; cursor:pointer; }",
+      ".custom-duration select:focus { outline:none; border-color:var(--primary-color); }",
+      ".custom-duration-label { font-size:0.78rem; opacity:0.85; }",
+      ".duration-hint { font-size:0.74rem; opacity:0.75; margin-top:6px; }",
+      ".actions { display:flex; gap:8px; margin-top:10px; }",
+      ".action-btn { border:1px solid rgba(127,127,127,0.35); background:transparent; border-radius:10px; padding:7px 12px; font-size:0.82rem; cursor:pointer; }",
+      ".action-btn.apply { background: var(--primary-color); border-color: var(--primary-color); color: var(--text-primary-color); }",
+      ".action-btn:disabled { opacity:0.55; cursor:not-allowed; }",
+      ".override { font-size:0.8rem; color: var(--secondary-text-color); margin-top:8px; }",
+      ".faults { margin-top: 10px; color: #c62828; font-size: 0.82rem; }",
+      "</style>",
+      '<ha-card aria-busy="' + isBusy + '">',
+      loadingHtml,
+      '<div class="wrap">',
+      '<div class="head">',
+      '<div class="name">' + this._escapeHtml(friendlyName) + "</div>",
+      '<div class="state"><span class="state-text">' + this._escapeHtml(stateLabel) + '</span><ha-icon class="state-icon" icon="mdi:water-boiler"></ha-icon></div>',
+      "</div>",
+      '<div class="temp">' + this._escapeHtml(currentTempStr) + '<span class="unit">\u00B0C</span></div>',
+      '<div class="meta">',
+      '<div class="box"><div class="k">Mode</div><div class="v">' + this._escapeHtml(String(modeValue)) + "</div></div>",
+      '<div class="box"><div class="k">Sensor</div><div class="v">' + (tempAvailable ? "Available" : "Unavailable") + "</div></div>",
+      '<div class="box"><div class="k">Now</div><div class="v">' + this._escapeHtml(String(thisState)) + " since " + this._escapeHtml(this._formatTime(thisFrom)) + "</div></div>",
+      '<div class="box"><div class="k">Next</div><div class="v">' + this._escapeHtml(String(nextState)) + " at " + this._escapeHtml(this._formatTime(nextFrom)) + "</div></div>",
+      "</div>",
+      durationHtml,
+      '<div class="mode-row">' + buttonsHtml + "</div>",
+      applyControls,
+      faultsHtml,
+      "</div>",
+      "</ha-card>",
+    ].join("\n");
+
+    var self = this;
+    var modeButtons = this.shadowRoot.querySelectorAll(".mode-btn[data-mode]");
+    for (var i = 0; i < modeButtons.length; i++) {
+      (function (btn) {
+        btn.addEventListener("click", function () {
+          self._setDraftMode(btn.getAttribute("data-mode"));
+        });
+      })(modeButtons[i]);
+    }
+
+    var applyBtn = this.shadowRoot.getElementById("apply-btn");
+    var discardBtn = this.shadowRoot.getElementById("discard-btn");
+    if (applyBtn) applyBtn.addEventListener("click", function () { self._applyDraftChanges(); });
+    if (discardBtn) discardBtn.addEventListener("click", function () {
+      self._clearDraft();
+      self._render();
+    });
+
+    var customDurBtn = this.shadowRoot.getElementById("custom-dur-btn");
+    var customHoursEl = this.shadowRoot.getElementById("custom-hours");
+    var customMinsEl = this.shadowRoot.getElementById("custom-mins");
+    if (customDurBtn) customDurBtn.addEventListener("click", function () { self._toggleCustomDuration(); });
+    if (customHoursEl) customHoursEl.addEventListener("change", function (e) { self._handleCustomHours(e.target.value); });
+    if (customMinsEl) customMinsEl.addEventListener("change", function (e) { self._handleCustomMins(e.target.value); });
+
+    var durBtns = this.shadowRoot.querySelectorAll(".dur-btn[data-mins]");
+    for (var d = 0; d < durBtns.length; d++) {
+      (function (btn) {
+        btn.addEventListener("click", function () {
+          self._setDuration(parseInt(btn.getAttribute("data-mins"), 10));
+        });
+      })(durBtns[d]);
+    }
+  }
+
+  getCardSize() {
+    return 3;
+  }
+}
+
+if (!customElements.get("evohome-hot-water-card")) {
+  customElements.define("evohome-hot-water-card", EvohomeHotWaterCard);
+}
+
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "evohome-zone-card",
   name: "Evohome Zone Card",
   description: "Custom card for Honeywell Evohome heating zones with override controls.",
+});
+window.customCards.push({
+  type: "evohome-hot-water-card",
+  name: "Evohome Hot Water Card",
+  description: "Custom card for Honeywell Evohome domestic hot water control and schedule status.",
 });

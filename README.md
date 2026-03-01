@@ -1,40 +1,61 @@
 # Evohome Cards
 
-Custom Lovelace card for Honeywell Evohome climate zones, with temporary/permanent override controls and optional compact mode.
+Custom Lovelace cards for Honeywell Evohome:
+- `custom:evohome-zone-card` for climate zones
+- `custom:evohome-hot-water-card` for domestic hot water (DHW)
 
 > [!NOTE]
 > This repo was vibecoded.
 
 ## Features
 
-- Live zone temperature and target display
-- Temporary override with quick/custom durations
-- Permanent override and return-to-schedule controls
-- Optional HVAC on/off toggle
-- Optional compact row layout
-- Optional temperature color pills
+- Zone card:
+  - Live zone temperature and target display
+  - Temporary override with quick/custom durations
+  - Permanent override and return-to-schedule controls
+  - Optional HVAC on/off toggle
+  - Optional compact row layout
+  - Optional temperature color pills
+- Hot water card:
+  - Current DHW temperature and schedule state display
+  - Mode controls (`auto` / `on` / `off`)
+  - Override duration controls with quick presets + custom dropdowns
+  - Staged edits with `Apply` / `Discard`
+  - Automatic return to `auto` at selected end time
 
 ## Screenshots
 
+### Zone Card
+
 ### Schedule
 
-<img src="docs/schedule.png" alt="Schedule state" width="450">
+<img src="docs/zone-schedule.png" alt="Schedule state" width="450">
 
 ### Compact
 
-<img src="docs/compact.png" alt="Compact state" width="450">
+<img src="docs/zone-compact.png" alt="Compact state" width="450">
 
 ### Override Options
 
-<img src="docs/override-options.png" alt="Override options" width="450">
+<img src="docs/zone-override-options.png" alt="Override options" width="450">
 
 ### Temporary Override
 
-<img src="docs/override-temporary.png" alt="Temporary override" width="450">
+<img src="docs/zone-override-temporary.png" alt="Temporary override" width="450">
 
 ### Permanent Override
 
-<img src="docs/override-permanent.png" alt="Permanent override" width="450">
+<img src="docs/zone-override-permanent.png" alt="Permanent override" width="450">
+
+### Hot Water Card
+
+### Schedule
+
+<img src="docs/hw-schedule.png" alt="Hot water schedule state" width="450">
+
+### Override
+
+<img src="docs/hw-override.png" alt="Hot water override state" width="450">
 
 ## Installation
 
@@ -74,14 +95,14 @@ Resource UI path:
 4. Refresh browser cache (or hard reload).
 5. Add the card to a dashboard.
 
-## Basic Card YAML
+## Zone Card YAML
 
 ```yaml
 type: custom:evohome-zone-card
 entity: climate.living_room
 ```
 
-## Full Config YAML Example
+## Zone Card Full Config YAML
 
 ```yaml
 type: custom:evohome-zone-card
@@ -93,7 +114,28 @@ temp_pills: false
 compact: false
 ```
 
-## Config Options
+## Hot Water Card YAML
+
+```yaml
+type: custom:evohome-hot-water-card
+entity: water_heater.domestic_hot_water
+name: Domestic Hot Water
+```
+
+The hot water card reads Evohome DHW attributes such as:
+- `operation_mode` and `operation_list` (`auto`, `on`, `off`)
+- `status.setpoints.this_sp_*` and `status.setpoints.next_sp_*`
+- `status.state_status`
+- `status.temperature_status`
+
+Hot water overrides (`On` / `Off`) require an override duration selection in the card (quick presets or custom). If the requested duration crosses the next schedule change, the card reapplies the override at `next_sp_from + 1 minute` and still switches back to `auto` at the selected end time.
+Mode/duration edits are staged as pending changes and only sent when you press `Apply` (use `Discard` to cancel pending edits).
+
+Reason for the `+1 minute` reapply:
+- Evohome DHW `set_operation_mode` does not support a custom duration and non-`auto` modes naturally end at the next schedule setpoint.
+- Reapplying slightly after the setpoint boundary avoids racing the schedule transition exactly on the same timestamp.
+
+## Zone Card Config Options
 
 | Option | Required | Type | Default | Description |
 |---|---|---|---|---|
@@ -103,6 +145,13 @@ compact: false
 | `show_accent_bar` | No | `boolean` | `true` | Shows top accent bar color based on current temperature |
 | `temp_pills` | No | `boolean` | `false` | Uses tinted pill backgrounds for current/target temperatures |
 | `compact` | No | `boolean` | `false` | Starts in compact status-only view; expands on click |
+
+## Hot Water Card Config Options
+
+| Option | Required | Type | Default | Description |
+|---|---|---|---|---|
+| `entity` | Yes | `string` | none | Evohome DHW water heater entity (for example `water_heater.domestic_hot_water`) |
+| `name` | No | `string` | entity friendly name | Overrides displayed name |
 
 ## License
 
