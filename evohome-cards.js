@@ -371,15 +371,19 @@ class EvohomeZoneCard extends HTMLElement {
   }
 
   _cancelOverride() {
-    if (!this._hass) return;
+    if (!this._hass || !this._config.entity) return;
 
     this._localTemp = null;
     this._dirty = false;
     this._startLoading("FollowSchedule");
 
+    var entityParts = this._config.entity.split('.');
+    var zoneName = entityParts.length > 1 ? entityParts[1] : this._config.entity;
+    var buttonEntityId = "button.reset_" + zoneName;
+
     this._hass
-      .callService("evohome", "clear_zone_override", {
-        entity_id: this._config.entity,
+      .callService("button", "press", {
+        entity_id: buttonEntityId,
       })
       .catch(function (err) {
         console.error("Evohome cancel override failed:", err);
